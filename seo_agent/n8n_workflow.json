@@ -1,0 +1,128 @@
+{
+  "name": "Jypra SEO Intelligence Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger",
+      "name": "Manual / Schedule Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            { "name": "keyword", "value": "managed cyber security services" },
+            { "name": "ownDomain", "value": "jypragroup.com.au" },
+            { "name": "targetPage", "value": "https://jypragroup.com.au/managed-cyber-security-services/" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "setvars",
+      "name": "Set Keyword + Target",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "engine", "value": "google" },
+            { "name": "q", "value": "={{ $json.keyword }}" },
+            { "name": "location", "value": "Brisbane, Queensland, Australia" },
+            { "name": "gl", "value": "au" },
+            { "name": "hl", "value": "en" },
+            { "name": "num", "value": "10" },
+            { "name": "api_key", "value": "={{ $env.SERPAPI_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "serpapi",
+      "name": "SerpAPI Google Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const own = $('Set Keyword + Target').first().json.ownDomain;\nconst results = $json.organic_results || [];\nlet ownRank = null;\nconst competitors = [];\nfor (const r of results) {\n  if (!r.link) continue;\n  if (r.link.includes(own)) { if (ownRank===null) ownRank = r.position; }\n  else competitors.push(r.link);\n}\nreturn [{ json: {\n  keyword: $('Set Keyword + Target').first().json.keyword,\n  targetPage: $('Set Keyword + Target').first().json.targetPage,\n  ownRank,\n  topCompetitor: competitors[0] || null,\n  competitors: competitors.slice(0,3)\n}}];"
+      },
+      "id": "parseserp",
+      "name": "Parse Rank + Competitors",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.topCompetitor }}",
+        "options": { "response": { "response": { "responseFormat": "text" } } }
+      },
+      "id": "fetchcomp",
+      "name": "Fetch Top Competitor Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $json.data || $json.body || '';\nconst pick = (re) => { const m = html.match(re); return m ? m[1].replace(/<[^>]+>/g,'').trim() : ''; };\nconst title = pick(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);\nconst meta = pick(/<meta[^>]*name=[\"']description[\"'][^>]*content=[\"']([^\"']*)/i);\nconst h2s = [...html.matchAll(/<h2[^>]*>([\\s\\S]*?)<\\/h2>/gi)].map(m=>m[1].replace(/<[^>]+>/g,'').trim()).slice(0,10);\nconst words = html.replace(/<[^>]+>/g,' ').split(/\\s+/).filter(Boolean).length;\nconst prev = $('Parse Rank + Competitors').first().json;\nreturn [{ json: { ...prev, comp_title: title, comp_meta: meta, comp_h2: h2s, comp_words: words }}];"
+      },
+      "id": "extract",
+      "name": "Extract Competitor On-Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 1200,\n  \"system\": \"You are a senior SEO copywriter for an Australian cybersecurity consultancy. Return ONLY valid JSON.\",\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": \"Optimise our page for keyword: '{{ $json.keyword }}'. Our target page: {{ $json.targetPage }}. Our current Google rank: {{ $json.ownRank }}. Top competitor: {{ $json.topCompetitor }} (title: '{{ $json.comp_title }}', word count: {{ $json.comp_words }}, sections: {{ JSON.stringify($json.comp_h2) }}). Return JSON: {title_tag, meta_description, h1, h2_outline:[], faqs:[{q,a}], content_brief, priority_actions:[]}\"\n  }]\n}",
+        "options": {}
+      },
+      "id": "llm",
+      "name": "LLM: Generate SEO Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const txt = $json.content?.[0]?.text || '{}';\nlet rec; try { rec = JSON.parse(txt.replace(/```json|```/g,'').trim()); } catch(e){ rec = { _raw: txt }; }\nconst prev = $('Extract Competitor On-Page').first().json;\nreturn [{ json: { keyword: prev.keyword, ownRank: prev.ownRank, topCompetitor: prev.topCompetitor, recommendation: rec }}];"
+      },
+      "id": "finalise",
+      "name": "Parse + Finalise",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 300]
+    }
+  ],
+  "connections": {
+    "Manual / Schedule Trigger": { "main": [[{ "node": "Set Keyword + Target", "type": "main", "index": 0 }]] },
+    "Set Keyword + Target": { "main": [[{ "node": "SerpAPI Google Search", "type": "main", "index": 0 }]] },
+    "SerpAPI Google Search": { "main": [[{ "node": "Parse Rank + Competitors", "type": "main", "index": 0 }]] },
+    "Parse Rank + Competitors": { "main": [[{ "node": "Fetch Top Competitor Page", "type": "main", "index": 0 }]] },
+    "Fetch Top Competitor Page": { "main": [[{ "node": "Extract Competitor On-Page", "type": "main", "index": 0 }]] },
+    "Extract Competitor On-Page": { "main": [[{ "node": "LLM: Generate SEO Content", "type": "main", "index": 0 }]] },
+    "LLM: Generate SEO Content": { "main": [[{ "node": "Parse + Finalise", "type": "main", "index": 0 }]] }
+  },
+  "settings": {},
+  "_comment": "Import via n8n -> Workflows -> Import from File. Set SERPAPI_KEY and ANTHROPIC_API_KEY in n8n environment variables. To run all keywords, add a Google Sheets / CSV read node before 'Set Keyword + Target' and loop. To add a Google Sheet output, append a Google Sheets 'Append' node after 'Parse + Finalise'."
+}
